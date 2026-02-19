@@ -1,3 +1,12 @@
+/*Create a School management system where people can:
+    Register students & Staffs. 
+    Pay School fees on registration. 
+    Pay staffs also. 
+    Get the students and their details. 
+    Get all Staffs. 
+Pricing is based on grade / levels from 100 - 400 level. 
+Payment status can be updated once the payment is made which should include the timestamp.
+*/
 
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
@@ -35,10 +44,7 @@ contract SchoolManagement {
         bool exists;
     }
 
-    // =========================
     // STORAGE
-    // =========================
-
     mapping(uint => Student) public students;
     mapping(uint => Staff) public staffs;
 
@@ -48,28 +54,20 @@ contract SchoolManagement {
     // Level pricing (fees per level)
     mapping(uint => uint) public levelFees;
 
-    // =========================
     // EVENTS
-    // =========================
-
     event StudentRegistered(uint studentId, string name, uint level);
     event FeesPaid(uint studentId, uint amount, uint timestamp);
     event StaffRegistered(uint staffId, string name);
     event StaffPaid(uint staffId, uint amount, uint timestamp);
 
-    // =========================
     // SET LEVEL FEES
-    // =========================
 
     function setLevelFee(uint level, uint fee) external onlyOwner {
         require(level >= 100 && level <= 400, "Invalid level");
         levelFees[level] = fee;
     }
 
-    // =========================
     // REGISTER STUDENT (WITH PAYMENT)
-    // =========================
-
     function registerStudent(
         string memory _name,
         uint _level
@@ -95,10 +93,7 @@ contract SchoolManagement {
         emit FeesPaid(studentCount, msg.value, block.timestamp);
     }
 
-    // =========================
     // PAY ADDITIONAL SCHOOL FEES
-    // =========================
-
     function paySchoolFees(uint studentId) external payable {
         require(students[studentId].isRegistered, "Student not found");
 
@@ -108,10 +103,7 @@ contract SchoolManagement {
         emit FeesPaid(studentId, msg.value, block.timestamp);
     }
 
-    // =========================
     // REGISTER STAFF
-    // =========================
-
     function registerStaff(
         string memory _name,
         string memory _role
@@ -131,9 +123,7 @@ contract SchoolManagement {
         emit StaffRegistered(staffCount, _name);
     }
 
-    // =========================
     // PAY STAFF
-    // =========================
 
     function payStaff(uint staffId) external payable onlyOwner {
         require(staffs[staffId].exists, "Staff not found");
@@ -145,10 +135,7 @@ contract SchoolManagement {
         emit StaffPaid(staffId, msg.value, block.timestamp);
     }
 
-    // =========================
     // GET STUDENT DETAILS
-    // =========================
-
     function getStudent(uint studentId)
         external
         view
@@ -157,28 +144,19 @@ contract SchoolManagement {
         return students[studentId];
     }
 
-    // =========================
     // GET ALL STAFF IDS (Simple List)
-    // =========================
-
     function getAllStaffCount() external view returns (uint) {
         return staffCount;
     }
 
-    // =========================
     // WITHDRAW SCHOOL FUNDS
-    // =========================
-
     function withdrawFunds(uint amount) external onlyOwner {
         require(address(this).balance >= amount, "Insufficient balance");
 
         payable(owner).transfer(amount);
     }
 
-    // =========================
     // CONTRACT BALANCE
-    // =========================
-
     function contractBalance() external view returns (uint) {
         return address(this).balance;
     }
