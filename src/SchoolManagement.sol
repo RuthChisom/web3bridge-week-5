@@ -11,6 +11,11 @@ Payment status can be updated once the payment is made which should include the 
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
+interface IERC20 {
+    function transferFrom(address sender, address recipient, uint256 amount) external returns (bool);
+    function transfer(address recipient, uint256 amount) external returns (bool);
+}
+
 contract SchoolManagement {
 
     address public owner;
@@ -24,13 +29,16 @@ contract SchoolManagement {
         _;
     }
 
+    // =========================
     // STRUCTS
+    // =========================
 
     struct Student {
         uint id;
         string name;
         uint level; // 100 - 400
-        uint feesPaid;
+        uint feesPaidETH;
+        mapping(address => uint) feesPaidERC20; // ERC20 token payments
         bool isRegistered;
         uint paymentTimestamp;
     }
@@ -39,125 +47,198 @@ contract SchoolManagement {
         uint id;
         string name;
         string role;
-        uint salaryPaid;
-        uint paymentTimestamp;
+        uint salaryPaidETH;
+        mapping(address => uint) salaryPaidERC20; // ERC20 token payments
+        bool isSuspended;
+        uint lastPaymentTimestamp;
         bool exists;
     }
 
+    // =========================
     // STORAGE
-    mapping(uint => Student) public students;
-    mapping(uint => Staff) public staffs;
+    // =========================
+
+    mapping(uint => Student) private students;
+    mapping(uint => Staff) private staffs;
 
     uint public studentCount;
     uint public staffCount;
 
-    // Level pricing (fees per level)
-    mapping(uint => uint) public levelFees;
+    mapping(uint => uint) public levelFees; // level => fee in ETH
 
+    // =========================
     // EVENTS
-    event StudentRegistered(uint studentId, string name, uint level);
-    event FeesPaid(uint studentId, uint amount, uint timestamp);
-    event StaffRegistered(uint staffId, string name);
-    event StaffPaid(uint staffId, uint amount, uint timestamp);
+    // =========================
 
-    // SET LEVEL FEES
+    event StudentRegistered(uint studentId, string name, uint level);
+    event FeesPaidETH(uint studentId, uint amount, uint timestamp);
+    event FeesPaidERC20(uint studentId, address token, uint amount, uint timestamp);
+    event StudentRemoved(uint studentId);
+
+    event StaffRegistered(uint staffId, string name);
+    event StaffPaidETH(uint staffId, uint amount, uint timestamp);
+    event StaffPaidERC20(uint staffId, address token, uint amount, uint timestamp);
+    event StaffSuspended(uint staffId, bool suspended);
+
+    // =========================
+    // LEVEL FEES
+    // =========================
 
     function setLevelFee(uint level, uint fee) external onlyOwner {
         require(level >= 100 && level <= 400, "Invalid level");
         levelFees[level] = fee;
     }
 
-    // REGISTER STUDENT (WITH PAYMENT)
-    function registerStudent(
-        string memory _name,
-        uint _level
-    ) external payable {
+    // =========================
+    // STUDENT FUNCTIONS
+    // =========================
 
+    function registerStudent(string memory _name, uint _level) external payable {
         require(_level >= 100 && _level <= 400, "Invalid level");
-
         uint requiredFee = levelFees[_level];
         require(msg.value >= requiredFee, "Insufficient school fee");
 
         studentCount++;
-
-        students[studentCount] = Student({
-            id: studentCount,
-            name: _name,
-            level: _level,
-            feesPaid: msg.value,
-            isRegistered: true,
-            paymentTimestamp: block.timestamp
-        });
+        Student storage s = students[studentCount];
+        s.id = studentCount;
+        s.name = _name;
+        s.level = _level;
+        s.feesPaidETH = msg.value;
+        s.isRegistered = true;
+        s.paymentTimestamp = block.timestamp;
 
         emit StudentRegistered(studentCount, _name, _level);
-        emit FeesPaid(studentCount, msg.value, block.timestamp);
+        emit FeesPaidETH(studentCount, msg.value, block.timestamp);
     }
 
-    // PAY ADDITIONAL SCHOOL FEES
-    function paySchoolFees(uint studentId) external payable {
+    function paySchoolFeesETH(uint studentId) external payable {
+        Student storage s = students[studentId];
+        require(s.isRegistered, "Student not found");
+
+        s.feesPaidETH += msg.value;
+        s.paymentTimestamp = block.timestamp;
+
+        emit FeesPaidETH(studentId, msg.value, block.timestamp);
+    }
+
+    // ====== ERC20 Student Payment ======
+    function paySchoolFeesERC20(uint studentId, address token, uint amount) external {
+        Student storage s = students[studentId];
+        require(s.isRegistered, "Student not found");
+        require(amount > 0, "Amount must be > 0");
+
+        IERC20 erc20 = IERC20(token);
+        require(erc20.transferFrom(msg.sender, address(this), amount), "ERC20 transfer failed");
+
+        s.feesPaidERC20[token] += amount;
+        s.paymentTimestamp = block.timestamp;
+
+        emit FeesPaidERC20(studentId, token, amount, block.timestamp);
+    }
+
+    // ====== Remove Student ======
+    function removeStudent(uint studentId) external onlyOwner {
         require(students[studentId].isRegistered, "Student not found");
-
-        students[studentId].feesPaid += msg.value;
-        students[studentId].paymentTimestamp = block.timestamp;
-
-        emit FeesPaid(studentId, msg.value, block.timestamp);
+        delete students[studentId];
+        emit StudentRemoved(studentId);
     }
 
-    // REGISTER STAFF
-    function registerStaff(
-        string memory _name,
-        string memory _role
-    ) external onlyOwner {
+    function getStudent(uint studentId) external view returns (
+        uint id,
+        string memory name,
+        uint level,
+        uint feesPaidETH,
+        uint paymentTimestamp,
+        bool isRegistered
+    ) {
+        Student storage s = students[studentId];
+        return (s.id, s.name, s.level, s.feesPaidETH, s.paymentTimestamp, s.isRegistered);
+    }
 
+    function getStudentERC20Balance(uint studentId, address token) external view returns (uint) {
+        return students[studentId].feesPaidERC20[token];
+    }
+
+    // =========================
+    // STAFF FUNCTIONS
+    // =========================
+
+    function registerStaff(string memory _name, string memory _role) external onlyOwner {
         staffCount++;
-
-        staffs[staffCount] = Staff({
-            id: staffCount,
-            name: _name,
-            role: _role,
-            salaryPaid: 0,
-            paymentTimestamp: 0,
-            exists: true
-        });
+        Staff storage s = staffs[staffCount];
+        s.id = staffCount;
+        s.name = _name;
+        s.role = _role;
+        s.salaryPaidETH = 0;
+        s.isSuspended = false;
+        s.lastPaymentTimestamp = 0;
+        s.exists = true;
 
         emit StaffRegistered(staffCount, _name);
     }
 
-    // PAY STAFF
+    function payStaffETH(uint staffId) external payable onlyOwner {
+        Staff storage s = staffs[staffId];
+        require(s.exists, "Staff not found");
+        require(!s.isSuspended, "Staff suspended");
 
-    function payStaff(uint staffId) external payable onlyOwner {
-        require(staffs[staffId].exists, "Staff not found");
-        require(msg.value > 0, "No payment sent");
+        s.salaryPaidETH += msg.value;
+        s.lastPaymentTimestamp = block.timestamp;
 
-        staffs[staffId].salaryPaid += msg.value;
-        staffs[staffId].paymentTimestamp = block.timestamp;
-
-        emit StaffPaid(staffId, msg.value, block.timestamp);
+        emit StaffPaidETH(staffId, msg.value, block.timestamp);
     }
 
-    // GET STUDENT DETAILS
-    function getStudent(uint studentId)
-        external
-        view
-        returns (Student memory)
-    {
-        return students[studentId];
+    // ====== ERC20 Staff Payment ======
+    function payStaffERC20(uint staffId, address token, uint amount) external onlyOwner {
+        Staff storage s = staffs[staffId];
+        require(s.exists, "Staff not found");
+        require(!s.isSuspended, "Staff suspended");
+        require(amount > 0, "Amount must be > 0");
+
+        IERC20 erc20 = IERC20(token);
+        require(erc20.transferFrom(msg.sender, address(this), amount), "ERC20 transfer failed");
+
+        s.salaryPaidERC20[token] += amount;
+        s.lastPaymentTimestamp = block.timestamp;
+
+        emit StaffPaidERC20(staffId, token, amount, block.timestamp);
     }
 
-    // GET ALL STAFF IDS (Simple List)
-    function getAllStaffCount() external view returns (uint) {
-        return staffCount;
+    // ====== Suspend Staff ======
+    function suspendStaff(uint staffId, bool suspend) external onlyOwner {
+        Staff storage s = staffs[staffId];
+        require(s.exists, "Staff not found");
+        s.isSuspended = suspend;
+
+        emit StaffSuspended(staffId, suspend);
     }
 
-    // WITHDRAW SCHOOL FUNDS
-    function withdrawFunds(uint amount) external onlyOwner {
-        require(address(this).balance >= amount, "Insufficient balance");
-
-        payable(owner).transfer(amount);
+    function getStaff(uint staffId) external view returns (
+        uint id,
+        string memory name,
+        string memory role,
+        uint salaryPaidETH,
+        uint lastPaymentTimestamp,
+        bool isSuspended
+    ) {
+        Staff storage s = staffs[staffId];
+        return (s.id, s.name, s.role, s.salaryPaidETH, s.lastPaymentTimestamp, s.isSuspended);
     }
 
+    function getStaffERC20Balance(uint staffId, address token) external view returns (uint) {
+        return staffs[staffId].salaryPaidERC20[token];
+    }
+
+    // =========================
     // CONTRACT BALANCE
+    // =========================
+
     function contractBalance() external view returns (uint) {
         return address(this).balance;
+    }
+
+    function withdrawFunds(uint amount) external onlyOwner {
+        require(address(this).balance >= amount, "Insufficient balance");
+        payable(owner).transfer(amount);
     }
 }
